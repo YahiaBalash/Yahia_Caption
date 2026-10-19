@@ -6,11 +6,11 @@
   <meta name="theme-color" content="#0b1533" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-title" content="كابشن AI" />
+  <meta name="apple-mobile-web-app-title" content="Caption AI" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-  <title>كابشن AI — حوّل الفيديو إلى نص</title>
+  <title>Caption AI - Yahia Balash</title>
   <meta name="description" content="أداة عربية لاستخراج الكابشن وتفريغ كلام الفيديو إلى نص قابل للتعديل والنسخ والتحميل والمشاركة." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -52,7 +52,7 @@
     <div class="container topbar-inner">
       <a class="brand" href="#">
         <span class="brand-logo" aria-hidden="true">CC</span>
-        <span class="brand-name" data-site-name>كابشن AI</span>
+        <span class="brand-name" dir="ltr" data-site-name>Caption AI - Yahia Balash</span>
       </a>
       <div class="topbar-actions">
         <button id="installBtn" class="top-btn" hidden>
@@ -92,7 +92,7 @@
           <svg class="ic"><use href="#i-info"/></svg>
           <div>
             <p><strong>الروابط تحتاج الحاسوب.</strong> المتصفح لا يستطيع جلب صوت أو ترجمة فيديو من YouTube أو Facebook مباشرة، لذلك تعمل الروابط فقط عند تشغيل الخادم على حاسوبك وفتح عنوانه من الهاتف.</p>
-            <p>البديل الآن: احفظ الفيديو على هاتفك (إن كان يحق لك ذلك) ثم ارفعه من تبويب «رفع ملف»، أو شاركه من المعرض إلى «كابشن AI» مباشرة، فيُفرَّغ هنا على جهازك.</p>
+            <p>البديل الآن: احفظ الفيديو على هاتفك (إن كان يحق لك ذلك) ثم ارفعه من تبويب «رفع ملف»، أو شاركه من المعرض إلى «Caption AI» مباشرة، فيُفرَّغ هنا على جهازك.</p>
           </div>
         </div>
         <label for="videoUrl" class="field-label">رابط الفيديو</label>
@@ -299,8 +299,12 @@
 
   <footer class="footer">
     <div class="container">
-      <p><span data-site-name>كابشن AI</span> — استخدم الأداة مع محتوى تملكه أو يحق لك استخدامه، واحترم حقوق أصحاب المحتوى.</p>
+      <p>استخدم الأداة مع محتوى تملكه أو يحق لك استخدامه، واحترم حقوق أصحاب المحتوى.</p>
       <p class="muted">لا نخزّن ملفاتك: تُحذف الملفات المؤقتة من الخادم فور انتهاء المعالجة.</p>
+      <div class="footer-legal">
+        <p><span dir="ltr" data-site-name>Caption AI - Yahia Balash</span> · جميع الحقوق محفوظة <span dir="ltr">10/2026</span></p>
+        <p>للاستفسار: <a class="contact-link" href="tel:+963994652968" dir="ltr">+963994652968</a></p>
+      </div>
     </div>
   </footer>
 
@@ -322,7 +326,7 @@
   <!-- نافذة فتح الموقع على الهاتف -->
   <dialog id="phoneDialog" class="dialog phone-dialog">
     <form method="dialog">
-      <h3>افتح «<span data-site-name>كابشن AI</span>» على هاتفك</h3>
+      <h3>افتح <span dir="ltr">«Caption AI»</span> على هاتفك</h3>
 
       <div id="phoneDisabled" class="alert alert-warn" hidden>
         <svg class="ic"><use href="#i-alert"/></svg>
@@ -350,7 +354,7 @@
           <li><strong>لتثبيته كتطبيق بأيقونة</strong> (مرة واحدة): افتح في Chrome على الهاتف
             <code dir="ltr" class="block">chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>
             وأضف العنوان أعلاه، واختر Enabled، ثم Relaunch. بعدها افتح الموقع واختر من قائمة Chrome «تثبيت التطبيق».</li>
-          <li>بعد التثبيت: من تطبيق YouTube أو Facebook اضغط «مشاركة» واختر «كابشن AI»، فيبدأ استخراج النص مباشرة.</li>
+          <li>بعد التثبيت: من تطبيق YouTube أو Facebook اضغط «مشاركة» واختر «Caption AI»، فيبدأ استخراج النص مباشرة.</li>
         </ol>
       </div>
 

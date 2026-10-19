@@ -417,3 +417,11 @@ button, .tab, .share-btn, .dropzone { -webkit-tap-highlight-color: transparent; 
 .standalone-note p + p { margin-top: 6px; }
 .cancel-btn { margin-top: 12px; }
 .options:has(#modeOption[hidden]):has(#deviceModelOption:not([hidden])) { grid-template-columns: 1fr 2fr; }
+
+/* ---------- الحقوق والتواصل ---------- */
+.footer-legal { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.footer-legal p { margin: 4px 0; color: var(--navy-700); font-weight: 600; }
+.contact-link { color: var(--violet-500); font-weight: 700; text-decoration: none; unicode-bidi: isolate; }
+.contact-link:hover { text-decoration: underline; }
+.brand-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 420px) { .brand-name { font-size: 14px; max-width: 42vw; } }

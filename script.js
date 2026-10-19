@@ -7,7 +7,7 @@
 // ---------- الإعدادات العامة ----------
 const CONFIG = {
   // غيّر اسم الموقع من هنا فقط
-  SITE_NAME: "كابشن AI",
+  SITE_NAME: "Caption AI - Yahia Balash",
   // عنوان الخادم: فارغ = نفس العنوان. عند فتح index.html مباشرة من الجهاز نتصل بالخادم المحلي.
   API_BASE: location.protocol === "file:" ? "http://localhost:5000" : "",
   POLL_INTERVAL_MS: 1500,
@@ -1299,7 +1299,7 @@ async function handleSharedLink() {
 // =========================================================
 function init() {
   document.querySelectorAll("[data-site-name]").forEach((el) => (el.textContent = CONFIG.SITE_NAME));
-  document.title = CONFIG.SITE_NAME + " — حوّل الفيديو إلى نص";
+  document.title = CONFIG.SITE_NAME;
   try {
     const f = parseInt(localStorage.getItem("captionai.font"), 10);
     if (f >= CONFIG.FONT_MIN && f <= CONFIG.FONT_MAX) state.fontSize = f;
