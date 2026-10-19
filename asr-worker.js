@@ -41,7 +41,128 @@ function dtypeFor(model, device) {
   return { encoder_model: "q8", decoder_model_merged: "q8" };
 }
 
-/** تحميل النموذج مع إرسال نسبة التنزيل الإجمالية لكل الملفات */
+// =========================================================
+// تنزيل قابل للاستئناف
+// المكتبة تعيد تنزيل الملف من الصفر عند أي انقطاع، والمُرمِّز وحده قد يبلغ 425 ميغابايت.
+// لذلك ننزّل كل ملف على أجزاء (4 ميغابايت) ونحفظ كل جزء فور وصوله، ونعيد محاولة الجزء الفاشل فقط.
+// عند اكتمال الملف نجمعه ونضعه في ذاكرة المكتبة (transformers-cache) فتجده جاهزاً ولا تنزّله.
+// =========================================================
+const HF = "https://huggingface.co";
+const PART = 4 * 1024 * 1024;
+const LIB_CACHE = "transformers-cache";
+const PART_CACHE = "captionai-partial";
+const SUFFIX = { q4: "_q4", q8: "_quantized", fp16: "_fp16", fp32: "" };
+const CONFIG_FILES = ["config.json", "generation_config.json", "preprocessor_config.json", "tokenizer.json", "tokenizer_config.json"];
+
+const isNetworkError = (err) => /network|Failed to fetch|NetworkError|ERR_|timed? ?out|HTTP 5\d\d|HTTP 429/i.test(String(err && err.message || err));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const fileUrl = (repo, path) => `${HF}/${repo}/resolve/main/${path}`;
+
+/**
+ * fetch مع كشف «التوقف» وإعادة محاولة متدرّجة (2، 4، 8… ثوانٍ).
+ * لا نقطع الاتصال لأنه بطيء، بل فقط إذا لم يصل أي بايت لمدة STALL_MS، فيعمل حتى على اتصال ضعيف جداً.
+ */
+const STALL_MS = 30000;
+async function fetchRetry(url, opts = {}, tries = 8, onBytes = null) {
+  for (let i = 0; ; i++) {
+    const ctrl = new AbortController();
+    let timer = setTimeout(() => ctrl.abort(), STALL_MS);
+    const alive = () => { clearTimeout(timer); timer = setTimeout(() => ctrl.abort(), STALL_MS); };
+    try {
+      const res = await fetch(url, { ...opts, signal: ctrl.signal });
+      if (res.status >= 500 || res.status === 429) throw new Error("HTTP " + res.status);
+      if (!res.ok) throw Object.assign(new Error("HTTP " + res.status), { fatal: true });
+      const reader = res.body.getReader();
+      const chunks = [];
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        alive();
+        chunks.push(value);
+        received += value.length;
+        onBytes && onBytes(received);
+      }
+      return { res, blob: new Blob(chunks) };
+    } catch (err) {
+      if (err.fatal || i >= tries - 1) throw err.name === "AbortError" ? new Error("NetworkError: توقف الاتصال") : err;
+      await sleep(Math.min(30000, 2000 * 2 ** i));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** أحجام ملفات النموذج من واجهة Hugging Face */
+async function fileSizes(repo) {
+  const { blob } = await fetchRetry(`${HF}/api/models/${repo}/tree/main/onnx`);
+  const list = JSON.parse(await blob.text());
+  return Object.fromEntries(list.map((f) => [f.path, f.lfs?.size || f.size || 0]));
+}
+
+async function ensureCached(repo, dtype) {
+  if (typeof caches === "undefined") return; // اتصال غير آمن: نترك المكتبة تنزّل بطريقتها
+  const lib = await caches.open(LIB_CACHE);
+  const parts = await caches.open(PART_CACHE);
+
+  // الملفات الصغيرة: تنزيل عادي مع إعادة المحاولة
+  for (const name of CONFIG_FILES) {
+    const url = fileUrl(repo, name);
+    if (await lib.match(url)) continue;
+    try {
+      const { res, blob } = await fetchRetry(url);
+      await lib.put(url, new Response(blob, { headers: { "Content-Type": res.headers.get("Content-Type") || "application/json" } }));
+    } catch (err) {
+      if (!/HTTP 404/.test(err.message)) throw err;
+    }
+  }
+
+  const sizes = await fileSizes(repo);
+  const onnx = [
+    `onnx/encoder_model${SUFFIX[dtype.encoder_model]}.onnx`,
+    `onnx/decoder_model_merged${SUFFIX[dtype.decoder_model_merged]}.onnx`,
+  ];
+  const total = onnx.reduce((s, p) => s + (sizes[p] || 0), 0);
+  let done = 0;
+  const report = (extra = 0) => self.postMessage({
+    type: "download", loaded: done + extra, total, percent: Math.min(100, Math.round(((done + extra) / total) * 100)),
+  });
+
+  for (const path of onnx) {
+    const url = fileUrl(repo, path);
+    const size = sizes[path];
+    if (!size) throw new Error("ملف النموذج غير موجود: " + path);
+    if (await lib.match(url)) { done += size; report(); continue; }
+
+    const count = Math.ceil(size / PART);
+    const blobs = [];
+    for (let i = 0; i < count; i++) {
+      const key = `${url}?part=${i}`;
+      let piece = await parts.match(key);
+      if (piece) {
+        blobs.push(await piece.blob());
+      } else {
+        const start = i * PART, end = Math.min(size, start + PART) - 1;
+        const before = blobs.reduce((s, b) => s + b.size, 0);
+        const { res, blob } = await fetchRetry(url, { headers: { Range: `bytes=${start}-${end}` } }, 8,
+          (n) => report(before + n));
+        if (res.status !== 206 && count > 1) throw new Error("الخادم لا يدعم التنزيل على أجزاء");
+        if (blob.size !== end - start + 1) throw new Error("NetworkError: جزء ناقص");
+        await parts.put(key, new Response(blob));
+        blobs.push(blob);
+      }
+      report(blobs.reduce((s, b) => s + b.size, 0));
+    }
+    // جمع الأجزاء في ملف واحد بصيغة تفهمها المكتبة، ثم حذف الأجزاء لتوفير المساحة
+    const full = new Blob(blobs, { type: "application/octet-stream" });
+    await lib.put(url, new Response(full, { headers: { "Content-Type": "application/octet-stream", "Content-Length": String(full.size) } }));
+    for (let i = 0; i < count; i++) await parts.delete(`${url}?part=${i}`);
+    done += size;
+    report();
+  }
+}
+
+/** تحميل النموذج: تنزيل مضمون أولاً، ثم إنشاء محرك التفريغ من الذاكرة المحلية */
 async function load(model) {
   const { webgpu } = await detectGpu();
   if (model === "turbo" && !webgpu) model = "small"; // النموذج الكبير يحتاج معالج رسوميات
@@ -49,31 +170,22 @@ async function load(model) {
   for (const device of devices) {
     const key = model + ":" + device;
     if (asr && loadedKey === key) return { model, device };
-    const files = {};
+    try {
+      await ensureCached(MODELS[model], dtypeFor(model, device));
+    } catch (err) {
+      throw new Error((isNetworkError(err) ? "NETWORK: " : "") + (err && err.message || err));
+    }
     try {
       if (asr) { await asr.dispose?.(); asr = null; }
-      asr = await pipeline("automatic-speech-recognition", MODELS[model], {
-        device,
-        dtype: dtypeFor(model, device),
-        progress_callback: (p) => {
-          if (p.status === "progress" && p.total) {
-            files[p.file] = { loaded: p.loaded, total: p.total };
-            const all = Object.values(files);
-            const loaded = all.reduce((s, f) => s + f.loaded, 0);
-            const total = all.reduce((s, f) => s + f.total, 0);
-            self.postMessage({ type: "download", loaded, total, percent: Math.round((loaded / total) * 100) });
-          }
-        },
-      });
+      self.postMessage({ type: "stage", stage: "loading" });
+      asr = await pipeline("automatic-speech-recognition", MODELS[model], { device, dtype: dtypeFor(model, device) });
       loadedKey = key;
       return { model, device };
     } catch (err) {
       asr = null;
-      // انقطاع التنزيل ليس عطلاً في WebGPU: نوقف ونطلب إعادة المحاولة (الملفات المكتملة محفوظة)
-      if (device === "wasm" || /network error|Failed to fetch|NetworkError|ERR_/i.test(String(err && err.message || err))) {
-        throw new Error("NETWORK: " + (err && err.message || err));
-      }
-      console.warn("WebGPU failed, falling back to WASM:", err);
+      if (isNetworkError(err)) throw new Error("NETWORK: " + (err && err.message || err));
+      if (device === "wasm") throw err;
+      console.warn("WebGPU failed, falling back to WASM:", err); // عطل حقيقي في WebGPU فقط
     }
   }
 }
