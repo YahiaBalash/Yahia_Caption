@@ -1,0 +1,21 @@
+# ⛔ الأسرار: لا تُرفع أبداً (مفاتيح API)
+.env
+*.env
+!.env.example
+server/.env
+
+# ملفات Python المؤقتة
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ملفات مؤقتة وملفات النظام
+*.log
+*.tmp
+*.part
+Thumbs.db
+.DS_Store
+desktop.ini
+.vscode/
+.idea/
