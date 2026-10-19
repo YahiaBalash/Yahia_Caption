@@ -4,22 +4,30 @@
   "description": "استخراج الكابشن وتفريغ كلام الفيديو إلى نص قابل للتعديل والنسخ والمشاركة.",
   "lang": "ar",
   "dir": "rtl",
-  "id": "/",
-  "start_url": "/",
-  "scope": "/",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#f3f4fb",
   "theme_color": "#0b1533",
   "categories": ["productivity", "utilities"],
   "icons": [
-    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "share_target": {
-    "action": "/",
-    "method": "GET",
-    "params": { "title": "title", "text": "text", "url": "url" }
+    "action": "share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        { "name": "media", "accept": ["video/*", "audio/*", ".mp4", ".webm", ".mov", ".mkv", ".m4a", ".mp3", ".wav", ".ogg"] }
+      ]
+    }
   }
 }

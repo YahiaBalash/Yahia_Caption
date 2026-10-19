@@ -88,6 +88,13 @@
 
       <!-- الخيار الأول: الرابط -->
       <div class="tab-panel" id="panel-url" role="tabpanel" aria-labelledby="tab-url">
+        <div id="urlStandaloneNote" class="alert alert-info standalone-note" hidden>
+          <svg class="ic"><use href="#i-info"/></svg>
+          <div>
+            <p><strong>الروابط تحتاج الحاسوب.</strong> المتصفح لا يستطيع جلب صوت أو ترجمة فيديو من YouTube أو Facebook مباشرة، لذلك تعمل الروابط فقط عند تشغيل الخادم على حاسوبك وفتح عنوانه من الهاتف.</p>
+            <p>البديل الآن: احفظ الفيديو على هاتفك (إن كان يحق لك ذلك) ثم ارفعه من تبويب «رفع ملف»، أو شاركه من المعرض إلى «كابشن AI» مباشرة، فيُفرَّغ هنا على جهازك.</p>
+          </div>
+        </div>
         <label for="videoUrl" class="field-label">رابط الفيديو</label>
         <div class="url-row">
           <div class="url-input-wrap">
@@ -158,6 +165,14 @@
             <option value="id">Indonesia</option>
           </select>
         </div>
+        <div class="option" id="deviceModelOption" hidden>
+          <label for="deviceModel">نموذج التفريغ على هذا الجهاز</label>
+          <select id="deviceModel">
+            <option value="base">سريع — Whisper Base (≈ 80 إلى 145 ميغابايت)</option>
+            <option value="small">متوازن — Whisper Small (≈ 250 إلى 300 ميغابايت)</option>
+            <option value="turbo">الأدق للعربية — Large v3 Turbo (≈ 760 ميغابايت، للهواتف القوية)</option>
+          </select>
+        </div>
         <div class="option" id="modeOption">
           <label for="mode">طريقة الاستخراج</label>
           <select id="mode">
@@ -183,6 +198,9 @@
         </div>
       </div>
       <div class="progress-track"><div id="progressBar" class="progress-bar indeterminate"></div></div>
+      <button id="cancelBtn" class="btn btn-ghost btn-sm cancel-btn" hidden>
+        <svg class="ic"><use href="#i-x"/></svg> إيقاف التفريغ
+      </button>
       <div id="livePreview" class="live-preview" hidden>
         <div class="live-head"><span class="live-dot"></span> النص يظهر أولاً بأول أثناء التفريغ</div>
         <div id="liveText" class="live-text" dir="auto"></div>

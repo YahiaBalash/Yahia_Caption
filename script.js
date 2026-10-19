@@ -15,7 +15,14 @@ const CONFIG = {
   SHARE_LIMITS: { whatsapp: 3000, telegram: 3500, email: 1800 },
   FONT_MIN: 14,
   FONT_MAX: 32,
+  DEVICE_MAX_MB: 500, // أقصى حجم للملف عند التفريغ على الجهاز نفسه
 };
+
+// استضافة ثابتة بلا خادم (GitHub Pages) أو فتح الملف مباشرة: لا نبحث عن خادم
+const IS_STATIC_HOST = /\.github\.io$/i.test(location.hostname);
+// التفريغ على الجهاز يحتاج Web Workers بنمط module و WebAssembly وفك ترميز الصوت
+const DEVICE_ASR_SUPPORTED = typeof Worker !== "undefined" && typeof WebAssembly !== "undefined" &&
+  !!(window.AudioContext || window.webkitAudioContext) && location.protocol !== "file:";
 
 const ALLOWED_EXT = ["mp4", "webm", "mov", "m4v", "mkv", "mp3", "m4a", "wav", "ogg"];
 
@@ -23,6 +30,7 @@ const SOURCE_LABELS = {
   official_captions: "ترجمة رسمية من صاحب الفيديو",
   auto_captions: "ترجمة تلقائية من المنصة",
   speech_to_text: "تفريغ الكلام (Speech-to-Text)",
+  on_device: "تفريغ على جهازك (Whisper)",
 };
 
 const LANG_NAMES = {
@@ -40,6 +48,7 @@ const state = {
   result: null,          // نتيجة الاستخراج من الخادم
   originalText: "",
   busy: false,
+  mode: "checking",      // server | device | none
   fontSize: 19,
 };
 
@@ -198,12 +207,15 @@ async function checkServer() {
     pill.title = title || text;
   };
   try {
+    // على GitHub Pages لا يوجد خادم أصلاً؛ ننتقل مباشرة إلى الوضع المستقل
+    if (IS_STATIC_HOST) throw new Error("static host");
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 6000);
     const res = await fetch(CONFIG.API_BASE + "/api/health", { signal: ctrl.signal });
     clearTimeout(t);
     if (!res.ok) throw new Error();
     state.server = await res.json();
+    state.mode = "server";
     els.dropLimit.textContent = `الحد الأقصى ${state.server.max_upload_mb} ميغابايت و${state.server.max_duration_min} دقيقة`;
     if (state.server.stt_ready) {
       set("status-ok", "الخادم متصل · " + state.server.stt_message);
@@ -213,8 +225,31 @@ async function checkServer() {
     }
   } catch (_) {
     state.server = null;
-    set("status-down", "الخادم غير متصل", "شغّل الخادم: python server/app.py (راجع README)");
+    if (DEVICE_ASR_SUPPORTED) {
+      // الوضع المستقل: الملفات تُفرَّغ على هذا الجهاز، والروابط تحتاج الخادم
+      state.mode = "device";
+      els.dropLimit.textContent = `يُفرَّغ على هذا الجهاز · الحد الأقصى ${CONFIG.DEVICE_MAX_MB} ميغابايت`;
+      set("status-ok", "وضع مستقل · التفريغ على هذا الجهاز",
+          IS_STATIC_HOST ? "الملفات تُفرَّغ على جهازك دون خادم. الروابط تحتاج تشغيل الخادم على الحاسوب."
+            : "الحاسوب غير متاح، فتُفرَّغ الملفات على هذا الجهاز. الروابط تحتاج الخادم.");
+    } else {
+      state.mode = "none";
+      set("status-down", "الخادم غير متصل", "شغّل الخادم: python server/app.py (راجع README)");
+    }
   }
+  applyMode();
+}
+
+/** يُظهر عناصر الواجهة المناسبة لوضع العمل الحالي */
+function applyMode() {
+  const device = state.mode === "device";
+  const urlTab = !els.panelUrl.hidden;
+  els.modeOption.hidden = device || !urlTab;
+  $("deviceModelOption").hidden = !device || urlTab;
+  $("urlStandaloneNote").hidden = !device;
+  els.extractUrlBtn.disabled = device || state.busy;
+  // زر «على الهاتف» يخص الخادم المحلي فقط
+  $("phoneBtn").hidden = !(isLocalHost && state.mode === "server");
 }
 
 // =========================================================
@@ -228,7 +263,7 @@ function switchTab(name) {
   });
   els.panelUrl.hidden = name !== "url";
   els.panelFile.hidden = name !== "file";
-  els.modeOption.hidden = name !== "url"; // طريقة الاستخراج تخص الروابط فقط
+  applyMode(); // طريقة الاستخراج تخص الروابط، ونموذج الجهاز يخص الملفات
   hideInputError();
 }
 els.tabs.forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
@@ -305,7 +340,7 @@ function selectFile(file) {
     els.fileInput.value = "";
     return;
   }
-  const maxMb = state.server ? state.server.max_upload_mb : 200;
+  const maxMb = state.mode === "device" ? CONFIG.DEVICE_MAX_MB : state.server ? state.server.max_upload_mb : 200;
   if (file.size > maxMb * 1024 * 1024) {
     showInputError(`حجم الملف (${formatBytes(file.size)}) أكبر من الحد المسموح (${maxMb} ميغابايت).`);
     els.fileInput.value = "";
@@ -369,6 +404,8 @@ let elapsedTimer = null;
 function setBusy(busy) {
   state.busy = busy;
   [els.extractUrlBtn, els.extractFileBtn, els.retryBtn].forEach((b) => (b.disabled = busy));
+  if (!busy) applyMode();
+  $("cancelBtn").hidden = true;
   els.progressCard.hidden = !busy;
   showLivePreview("");
   clearInterval(elapsedTimer);
@@ -394,7 +431,7 @@ function setProgress(stage, percent) {
 /** يعرض النص المفرَّغ حتى الآن، ويبقي آخره ظاهراً ما لم يمرّر المستخدم للأعلى ليقرأ */
 function showLivePreview(text) {
   const box = $("liveText");
-  if (!text) { $("livePreview").hidden = true; return; }
+  if (!text) { $("livePreview").hidden = true; box.textContent = ""; return; }
   if (box.textContent === text) return;
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   box.textContent = text;
@@ -477,23 +514,181 @@ async function runExtraction(req) {
   hideInputError();
   state.lastRequest = req;
   setBusy(true);
-  setProgress(req.type === "file" ? "جارٍ رفع الملف…" : "جارٍ إرسال الرابط…", req.type === "file" ? 0 : null);
   try {
-    const jobId = req.type === "file" ? await postFile(req) : await postUrl(req);
-    setProgress("جارٍ المعالجة…", null);
-    const result = await pollJob(jobId);
+    let result;
+    if (req.type === "device") {
+      result = await runDeviceTranscription(req);
+    } else {
+      setProgress(req.type === "file" ? "جارٍ رفع الملف…" : "جارٍ إرسال الرابط…", req.type === "file" ? 0 : null);
+      const jobId = req.type === "file" ? await postFile(req) : await postUrl(req);
+      setProgress("جارٍ المعالجة…", null);
+      result = await pollJob(jobId);
+    }
     showResult(result);
     toast("تم استخراج النص بنجاح");
   } catch (err) {
     showInputError(err.message || "حدث خطأ غير متوقع.");
     els.inputError.scrollIntoView({ behavior: "smooth", block: "center" });
-    checkServer();
+    if (req.type !== "device") checkServer();
   } finally {
     setBusy(false);
   }
 }
 
+// =========================================================
+// التفريغ على الجهاز نفسه (الوضع المستقل)
+// =========================================================
+let asrWorker = null;
+let cancelDevice = null;
+
+function getAsrWorker() {
+  if (!asrWorker) asrWorker = new Worker("asr-worker.js", { type: "module" });
+  return asrWorker;
+}
+
+/** يفك ترميز صوت الملف إلى 16kHz أحادي القناة (ما يحتاجه Whisper) */
+async function decodeAudio(file) {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  let ctx;
+  try {
+    ctx = new Ctx({ sampleRate: 16000 });
+  } catch (_) {
+    ctx = new Ctx(); // بعض المتصفحات لا تسمح بتحديد المعدل؛ نعيد التحويل يدوياً أدناه
+  }
+  try {
+    const decoded = await ctx.decodeAudioData(await file.arrayBuffer());
+    let mono;
+    if (decoded.numberOfChannels === 1) {
+      mono = decoded.getChannelData(0).slice();
+    } else {
+      const a = decoded.getChannelData(0), b = decoded.getChannelData(1);
+      mono = new Float32Array(a.length);
+      for (let i = 0; i < a.length; i++) mono[i] = (a[i] + b[i]) / 2;
+    }
+    if (decoded.sampleRate === 16000) return mono;
+    // إعادة التحويل إلى 16kHz
+    const ratio = decoded.sampleRate / 16000;
+    const out = new Float32Array(Math.floor(mono.length / ratio));
+    for (let i = 0; i < out.length; i++) out[i] = mono[Math.floor(i * ratio)];
+    return out;
+  } catch (_) {
+    throw new Error("تعذّرت قراءة صوت هذا الملف على الجهاز. جرّب صيغة MP4 أو M4A أو MP3 (بعض ملفات MOV وMKV لا يقرؤها المتصفح)، أو استخدم الحاسوب.");
+  } finally {
+    ctx.close?.();
+  }
+}
+
+/**
+ * يطلب من المتصفح تخزيناً دائماً حتى لا يحذف النموذج المحفوظ عند امتلاء المساحة
+ * (Chrome يوافق عادةً تلقائياً للتطبيقات المثبّتة). يعيد تنبيهاً إن كانت المساحة قليلة.
+ */
+async function protectModelStorage() {
+  if (!navigator.storage) return null;
+  let persisted = false;
+  try {
+    persisted = await navigator.storage.persisted();
+    if (!persisted && navigator.storage.persist) persisted = await navigator.storage.persist();
+  } catch (_) { /* تجاهل */ }
+  if (persisted) return null;
+  try {
+    const { quota = 0, usage = 0 } = await navigator.storage.estimate();
+    if (quota - usage < 3e9) {
+      return "مساحة التخزين المتاحة للمتصفح قليلة، وقد يحذف النموذج المحفوظ ليوفّر مساحة فيُعاد تنزيله في المرة القادمة. " +
+        "ثبّت التطبيق على الشاشة الرئيسية أو وفّر مساحة على الجهاز لتجنّب ذلك.";
+    }
+  } catch (_) { /* تجاهل */ }
+  return null;
+}
+
+async function runDeviceTranscription(req) {
+  const storageWarning = await protectModelStorage();
+  setProgress("جارٍ قراءة صوت الملف على جهازك…", null);
+  const audio = await decodeAudio(req.file);
+  const duration = audio.length / 16000;
+  if (duration < 0.5) throw new Error("الملف لا يحتوي على صوت يمكن تفريغه.");
+
+  const segmentsResult = await new Promise((resolve, reject) => {
+    const w = getAsrWorker();
+    let started = null;
+    cancelDevice = () => {
+      w.terminate();
+      asrWorker = null;
+      reject(new Error("أُوقف التفريغ."));
+    };
+    $("cancelBtn").hidden = false;
+    w.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === "download") {
+        setProgress(`جارٍ تنزيل نموذج التفريغ (مرة واحدة فقط)… ${m.percent}% — ${formatBytes(m.loaded)} من ${formatBytes(m.total)}`, m.percent);
+      } else if (m.type === "stage" && m.stage === "loading") {
+        setProgress("جارٍ تجهيز نموذج التفريغ…", null);
+      } else if (m.type === "stage" && m.stage === "transcribing") {
+        started = Date.now();
+        state.deviceRun = m;
+        setProgress(`جارٍ التفريغ على جهازك (${m.device === "webgpu" ? "معالج الرسوميات" : "المعالج"})…`, 1);
+      } else if (m.type === "progress") {
+        let eta = "";
+        const elapsed = (Date.now() - (started || Date.now())) / 1000;
+        if (m.processed > 0 && elapsed > 3) {
+          const remaining = Math.round((elapsed / m.processed) * (m.duration - m.processed));
+          eta = remaining > 0 ? ` — متبقٍ نحو ${formatDuration(remaining)}` : "";
+        }
+        setProgress(`جارٍ التفريغ على جهازك… ${m.percent}%${eta}`, m.percent);
+        showLivePreview(m.partial);
+      } else if (m.type === "done") {
+        resolve(m);
+      } else if (m.type === "error") {
+        const offline = /^NETWORK:|fetch|network|Failed to load|import/i.test(m.message);
+        reject(new Error(offline
+          ? "انقطع تنزيل نموذج التفريغ. اضغط «إعادة المحاولة» ليُكمل من حيث توقف (الأجزاء المكتملة محفوظة). يحتاج أول استخدام اتصالاً بالإنترنت؛ بعده يعمل دون اتصال."
+          : "تعذّر التفريغ على الجهاز: " + m.message));
+      }
+    };
+    w.onerror = (e) => {
+      e.preventDefault?.();
+      asrWorker = null;
+      reject(new Error("تعذّر تشغيل محرك التفريغ على هذا الجهاز. تأكد من اتصالك بالإنترنت في أول استخدام."));
+    };
+    w.postMessage({ type: "transcribe", audio, language: req.language, model: req.model }, [audio.buffer]);
+  }).finally(() => { cancelDevice = null; });
+
+  if (!segmentsResult.segments.length) throw new Error("لم يُعثر على كلام منطوق واضح في هذا المقطع.");
+  const warnings = storageWarning ? [storageWarning] : [];
+  if (segmentsResult.model !== req.model) {
+    warnings.push("هذا الجهاز لا يدعم معالج الرسوميات (WebGPU)، فاستُخدم نموذج Small بدلاً من Large v3 Turbo.");
+  }
+  return {
+    text: segmentsResult.text,
+    segments: segmentsResult.segments,
+    has_timestamps: true,
+    language: req.language || "",
+    source: "on_device",
+    meta: { title: req.file.name, duration, platform: "على هذا الجهاز" },
+    warnings,
+  };
+}
+
+$("cancelBtn").addEventListener("click", () => cancelDevice && cancelDevice());
+
+/** يختار نموذجاً افتراضياً مناسباً لقدرة الجهاز، ويتذكر اختيار المستخدم */
+async function initDeviceModel() {
+  const select = $("deviceModel");
+  let saved = null;
+  try { saved = localStorage.getItem("captionai.model"); } catch (_) { /* تجاهل */ }
+  let webgpu = false;
+  try { webgpu = !!(navigator.gpu && (await navigator.gpu.requestAdapter())); } catch (_) { /* لا WebGPU */ }
+  select.querySelector('option[value="turbo"]').disabled = !webgpu;
+  select.value = saved && !(saved === "turbo" && !webgpu) ? saved : webgpu ? "small" : "base";
+  select.addEventListener("change", () => {
+    try { localStorage.setItem("captionai.model", select.value); } catch (_) { /* تجاهل */ }
+  });
+}
+
 function startUrlExtraction() {
+  if (state.mode === "device") {
+    showInputError("الروابط تحتاج تشغيل الخادم على الحاسوب. ارفع ملف الفيديو بدلاً من ذلك ليُفرَّغ على هذا الجهاز.");
+    return;
+  }
   const v = validateUrl(els.videoUrl.value);
   if (!v.ok) {
     els.videoUrl.classList.add("invalid");
@@ -509,7 +704,11 @@ function startFileExtraction() {
     showInputError("اختر ملف فيديو أولاً.");
     return;
   }
-  runExtraction({ type: "file", file: state.file, language: els.language.value });
+  if (state.mode === "device") {
+    runExtraction({ type: "device", file: state.file, language: els.language.value, model: $("deviceModel").value });
+  } else {
+    runExtraction({ type: "file", file: state.file, language: els.language.value });
+  }
 }
 
 // =========================================================
@@ -1049,6 +1248,28 @@ async function handleSharedLink() {
   const match = shared.match(/https?:\/\/[^\s"'<>]+/);
   if (!p.toString()) return;
   history.replaceState(null, "", location.pathname); // إزالة المعاملات من شريط العنوان
+
+  // فيديو مُشارَك من المعرض: حفظه عامل الخدمة مؤقتاً، فنقرؤه ونبدأ التفريغ
+  if (p.get("shared-file")) {
+    try {
+      const cache = await caches.open("captionai-share");
+      const key = new URL("shared-media", document.baseURI).href;
+      const res = await cache.match(key);
+      await cache.delete(key);
+      if (!res) throw new Error();
+      const name = decodeURIComponent(res.headers.get("X-File-Name") || "shared-video.mp4");
+      const file = new File([await res.blob()], name, { type: res.headers.get("Content-Type") || "" });
+      switchTab("file");
+      selectFile(file);
+      if (!state.file) return; // رُفض الملف (صيغة أو حجم) وظهرت الرسالة
+      toast("تم استلام الفيديو، جارٍ استخراج النص…", "info");
+      await checkServer();
+      startFileExtraction();
+    } catch (_) {
+      toast("تعذّر استلام الملف المُشارَك", "error");
+    }
+    return;
+  }
   if (!match) {
     toast("لم يُعثر على رابط فيديو في ما تمت مشاركته", "error");
     return;
@@ -1056,8 +1277,12 @@ async function handleSharedLink() {
   switchTab("url");
   els.videoUrl.value = match[0];
   els.videoUrl.dispatchEvent(new Event("input"));
-  toast("تم استلام الرابط، جارٍ استخراج النص…", "info");
   await checkServer();
+  if (state.mode === "device") {
+    showInputError("استلمنا الرابط، لكن الروابط تحتاج تشغيل الخادم على الحاسوب. شارك ملف الفيديو نفسه من المعرض بدلاً منه ليُفرَّغ على هذا الجهاز.");
+    return;
+  }
+  toast("تم استلام الرابط، جارٍ استخراج النص…", "info");
   startUrlExtraction();
 }
 
@@ -1075,10 +1300,10 @@ function init() {
   if (navigator.share) els.deviceShareBtn.hidden = false;
   window.addEventListener("online", () => { toast("عاد الاتصال بالإنترنت", "info"); checkServer(); });
   window.addEventListener("offline", () => toast("انقطع الاتصال بالإنترنت", "error"));
-  // زر «على الهاتف» يظهر عند فتح الموقع من الحاسوب نفسه فقط
-  $("phoneBtn").hidden = !isLocalHost;
   registerServiceWorker();
-  checkServer();
-  handleSharedLink();
+  initDeviceModel();
+  const ready = checkServer();
+  // لا نعالج ما شاركه المستخدم قبل معرفة وضع العمل (خادم أو جهاز)
+  ready.finally(handleSharedLink);
 }
 init();

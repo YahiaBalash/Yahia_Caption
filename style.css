@@ -411,3 +411,9 @@ button, .tab, .share-btn, .dropzone { -webkit-tap-highlight-color: transparent; 
 }
 .lan-url { white-space: nowrap; word-break: normal; font-size: 16px; }
 .phone-steps code.block { display: block; margin: 6px 0; padding: 6px 8px; text-align: left; user-select: all; }
+
+/* ---------- الوضع المستقل (التفريغ على الجهاز) ---------- */
+.standalone-note { margin: 0 0 16px; }
+.standalone-note p + p { margin-top: 6px; }
+.cancel-btn { margin-top: 12px; }
+.options:has(#modeOption[hidden]):has(#deviceModelOption:not([hidden])) { grid-template-columns: 1fr 2fr; }

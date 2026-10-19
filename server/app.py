@@ -42,7 +42,7 @@ FRONTEND_DIR = os.path.dirname(SERVER_DIR)
 # لا نقدّم أي ملف آخر من المجلد (حماية .env وملفات الخادم)
 FRONTEND_FILES = {"index.html", "style.css", "script.js", "manifest.webmanifest", "sw.js",
                   "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png",
-                  "icons/apple-touch-icon.png", "icons/favicon-32.png"}
+                  "icons/apple-touch-icon.png", "icons/favicon-32.png", "asr-worker.js"}
 
 STT_PROVIDER = os.getenv("STT_PROVIDER", "groq").strip().lower()  # groq | openai | local | none
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
