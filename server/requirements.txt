@@ -1,0 +1,10 @@
+flask>=3.0
+requests>=2.31
+yt-dlp>=2025.1.1
+python-dotenv>=1.0
+# نسخة ffmpeg جاهزة (لا حاجة لتثبيت ffmpeg يدوياً على ويندوز)
+imageio-ffmpeg>=0.5
+# اختياري: للتفريغ المحلي المجاني دون مفتاح API (STT_PROVIDER=local)
+# faster-whisper>=1.0
+qrcode>=7.4
+psutil>=5.9
