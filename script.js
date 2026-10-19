@@ -49,6 +49,9 @@ const state = {
   originalText: "",
   busy: false,
   mode: "checking",      // server | device | none
+  apiBase: CONFIG.API_BASE, // عنوان الخادم المستخدم (المحلي أو النفق)
+  apiKey: "",            // رمز الدخول عند الاتصال عبر النفق
+  remote: false,         // متصل بالحاسوب عبر الإنترنت؟
   fontSize: 19,
 };
 
@@ -199,6 +202,55 @@ function isRtlText(text) {
 // =========================================================
 // فحص الخادم
 // =========================================================
+// ---------- الاتصال بالحاسوب عبر الإنترنت (من صفحة GitHub) ----------
+// يُحفظ عنوان النفق ورمز الدخول بعد مسح رمز QR من نافذة «على الهاتف» في الحاسوب.
+const REMOTE_STORE = "captionai.remote";
+const TUNNEL_RE = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i; // لا نقبل أي عنوان آخر (حماية من روابط مزيّفة)
+
+function loadRemote() {
+  try {
+    const r = JSON.parse(localStorage.getItem(REMOTE_STORE) || "null");
+    return r && TUNNEL_RE.test(r.server) && r.key ? r : null;
+  } catch (_) { return null; }
+}
+
+/** يلتقط العنوان والرمز من رابط QR (بعد علامة # فلا يصلان إلى خوادم GitHub) ثم يمسحهما من شريط العنوان */
+function captureRemoteFromLink() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const server = (h.get("server") || "").replace(/\/+$/, "");
+  const key = h.get("key") || "";
+  if (!server && !key) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  if (!TUNNEL_RE.test(server) || key.length < 24) {
+    toast("رابط الاتصال بالحاسوب غير صالح", "error");
+    return;
+  }
+  try { localStorage.setItem(REMOTE_STORE, JSON.stringify({ server, key })); } catch (_) { /* تجاهل */ }
+  toast("تم حفظ الاتصال بحاسوبك، جارٍ الاتصال…", "info");
+}
+
+/** طلب إلى الخادم الحالي (المحلي أو عبر النفق) مع رمز الدخول عند الحاجة */
+function api(path, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (state.apiKey) headers["X-Access-Key"] = state.apiKey;
+  return fetch(state.apiBase + path, { ...opts, headers });
+}
+
+async function probeServer(base, key) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const res = await fetch(base + "/api/health", { signal: ctrl.signal, headers: key ? { "X-Access-Key": key } : {} });
+    if (res.status === 401) return { authError: true };
+    if (!res.ok) return null;
+    return { info: await res.json() };
+  } catch (_) {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 let serverRetryTimer = null;
 async function checkServer() {
   const pill = els.serverStatus;
@@ -207,39 +259,57 @@ async function checkServer() {
     pill.querySelector(".status-text").textContent = text;
     pill.title = title || text;
   };
-  try {
-    // على GitHub Pages لا يوجد خادم أصلاً؛ ننتقل مباشرة إلى الوضع المستقل
-    if (IS_STATIC_HOST) throw new Error("static host");
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 6000);
-    const res = await fetch(CONFIG.API_BASE + "/api/health", { signal: ctrl.signal });
-    clearTimeout(t);
-    if (!res.ok) throw new Error();
-    state.server = await res.json();
+  // 1) الخادم على العنوان نفسه (الحاسوب أو شبكة البيت)  2) الحاسوب عبر النفق (من صفحة GitHub)
+  const candidates = [];
+  if (!IS_STATIC_HOST) candidates.push({ base: CONFIG.API_BASE, key: "", remote: false });
+  const saved = loadRemote();
+  if (saved) candidates.push({ base: saved.server, key: saved.key, remote: true });
+
+  let found = null, authError = false;
+  for (const c of candidates) {
+    const r = await probeServer(c.base, c.key);
+    if (r && r.info) { found = { ...c, info: r.info }; break; }
+    if (r && r.authError) authError = true;
+  }
+
+  if (found) {
     if (state.mode === "device") toast("عاد الاتصال بالخادم، والروابط تعمل الآن", "info");
+    state.server = found.info;
+    state.apiBase = found.base;
+    state.apiKey = found.key;
+    state.remote = found.remote;
     state.mode = "server";
     clearInterval(serverRetryTimer);
     serverRetryTimer = null;
-    els.dropLimit.textContent = `الحد الأقصى ${state.server.max_upload_mb} ميغابايت و${state.server.max_duration_min} دقيقة`;
-    if (state.server.stt_ready) {
+    els.dropLimit.textContent = found.remote && DEVICE_ASR_SUPPORTED
+      ? `يُفرَّغ على هذا الجهاز · الحد الأقصى ${CONFIG.DEVICE_MAX_MB} ميغابايت`
+      : `الحد الأقصى ${state.server.max_upload_mb} ميغابايت و${state.server.max_duration_min} دقيقة`;
+    if (found.remote) {
+      set("status-ok", "متصل بحاسوبك عبر الإنترنت",
+          "الروابط تُعالَج على حاسوبك، والملفات تُفرَّغ على هذا الجهاز.");
+    } else if (state.server.stt_ready) {
       set("status-ok", "الخادم متصل · " + state.server.stt_message);
     } else {
       set("status-warn", "متصل · تفريغ الصوت غير مُعدّ",
           state.server.stt_message + " — يمكن استخراج الترجمات الموجودة فقط. راجع README.");
     }
-  } catch (_) {
+  } else {
     state.server = null;
-    // على عنوان الحاسوب: نعيد الفحص كل 15 ثانية، فتعود الروابط تلقائياً بمجرد تشغيل الخادم
-    if (!IS_STATIC_HOST && !serverRetryTimer) {
+    state.remote = false;
+    state.apiKey = "";
+    // نعيد الفحص كل 15 ثانية، فتعود الروابط تلقائياً بمجرد تشغيل الخادم على الحاسوب
+    if ((!IS_STATIC_HOST || saved) && !serverRetryTimer) {
       serverRetryTimer = setInterval(() => { if (!state.busy) checkServer(); }, 15000);
     }
     if (DEVICE_ASR_SUPPORTED) {
       // الوضع المستقل: الملفات تُفرَّغ على هذا الجهاز، والروابط تحتاج الخادم
       state.mode = "device";
       els.dropLimit.textContent = `يُفرَّغ على هذا الجهاز · الحد الأقصى ${CONFIG.DEVICE_MAX_MB} ميغابايت`;
-      set("status-ok", "وضع مستقل · التفريغ على هذا الجهاز",
-          IS_STATIC_HOST ? "الملفات تُفرَّغ على جهازك دون خادم. الروابط تحتاج تشغيل الخادم على الحاسوب."
-            : "الحاسوب غير متاح، فتُفرَّغ الملفات على هذا الجهاز. الروابط تحتاج الخادم.");
+      const why = authError ? "رمز الدخول تغيّر: امسح رمز QR من نافذة «على الهاتف» في الحاسوب."
+        : saved ? "حاسوبك غير متاح الآن (أو أُعيد تشغيل الخادم فتغيّر عنوانه). الملفات تُفرَّغ على هذا الجهاز."
+        : IS_STATIC_HOST ? "الملفات تُفرَّغ على جهازك دون خادم. الروابط تحتاج تشغيل الخادم على الحاسوب."
+        : "الحاسوب غير متاح، فتُفرَّغ الملفات على هذا الجهاز. الروابط تحتاج الخادم.";
+      set(saved ? "status-warn" : "status-ok", saved ? "الحاسوب غير متصل · وضع مستقل" : "وضع مستقل · التفريغ على هذا الجهاز", why);
     } else {
       state.mode = "none";
       set("status-down", "الخادم غير متصل", "شغّل الخادم: python server/app.py (راجع README)");
@@ -248,12 +318,17 @@ async function checkServer() {
   applyMode();
 }
 
+/** تُفرَّغ الملفات على هذا الجهاز في الوضع المستقل، وكذلك عند الاتصال بالحاسوب عبر الإنترنت (أسرع من رفعها) */
+function filesOnDevice() {
+  return state.mode === "device" || (state.remote && DEVICE_ASR_SUPPORTED);
+}
+
 /** يُظهر عناصر الواجهة المناسبة لوضع العمل الحالي */
 function applyMode() {
   const device = state.mode === "device";
   const urlTab = !els.panelUrl.hidden;
   els.modeOption.hidden = device || !urlTab;
-  $("deviceModelOption").hidden = !device || urlTab;
+  $("deviceModelOption").hidden = !filesOnDevice() || urlTab;
   $("urlStandaloneNote").hidden = !device;
   els.extractUrlBtn.disabled = device || state.busy;
   // زر «على الهاتف» يخص الخادم المحلي فقط
@@ -455,7 +530,7 @@ const SERVER_DOWN_MSG = ["localhost", "127.0.0.1", "[::1]", ""].includes(locatio
 async function postUrl(req) {
   let res;
   try {
-    res = await fetch(CONFIG.API_BASE + "/api/transcribe/url", {
+    res = await api("/api/transcribe/url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: req.url, language: req.language, mode: req.mode }),
@@ -475,7 +550,8 @@ function postFile(req) {
     form.append("file", req.file);
     form.append("language", req.language);
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", CONFIG.API_BASE + "/api/transcribe/file");
+    xhr.open("POST", state.apiBase + "/api/transcribe/file");
+    if (state.apiKey) xhr.setRequestHeader("X-Access-Key", state.apiKey);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
         const p = Math.round((e.loaded / e.total) * 100);
@@ -500,7 +576,7 @@ async function pollJob(jobId) {
     await new Promise((r) => setTimeout(r, CONFIG.POLL_INTERVAL_MS));
     let job;
     try {
-      const res = await fetch(CONFIG.API_BASE + "/api/jobs/" + jobId, { cache: "no-store" });
+      const res = await api("/api/jobs/" + jobId, { cache: "no-store" });
       job = await res.json();
       if (!res.ok) throw Object.assign(new Error(job.error || "تعذّرت متابعة المهمة."), { fatal: true });
       failures = 0;
@@ -712,7 +788,7 @@ function startFileExtraction() {
     showInputError("اختر ملف فيديو أولاً.");
     return;
   }
-  if (state.mode === "device") {
+  if (filesOnDevice()) {
     runExtraction({ type: "device", file: state.file, language: els.language.value, model: $("deviceModel").value });
   } else {
     runExtraction({ type: "file", file: state.file, language: els.language.value });
@@ -1230,9 +1306,40 @@ async function openPhoneDialog() {
     select.hidden = info.addresses.length < 2;
     showLanUrl(info.addresses[0].url);
   }
+  await showRemoteStatus();
   const dlg = $("phoneDialog");
-  if (typeof dlg.showModal === "function") dlg.showModal();
+  if (typeof dlg.showModal === "function" && !dlg.open) dlg.showModal();
 }
+
+/** قسم «من أي مكان عبر رابط GitHub»: حالة النفق ورمز QR للاتصال */
+let remoteLink = "";
+async function showRemoteStatus() {
+  let r;
+  try {
+    r = await (await fetch(CONFIG.API_BASE + "/api/remote", { cache: "no-store" })).json();
+  } catch (_) {
+    return;
+  }
+  const status = $("remoteStatus");
+  $("remoteReady").hidden = !r.ready;
+  if (r.ready) {
+    remoteLink = r.link;
+    $("remoteQr").src = CONFIG.API_BASE + "/api/qr.svg?url=" + encodeURIComponent(r.link);
+    status.textContent = "";
+  } else if (!r.enabled) {
+    status.innerHTML = 'غير مفعّل. أضف السطر <code dir="ltr">TUNNEL=1</code> إلى ملف <code dir="ltr">server/.env</code> ثم أعد تشغيل الخادم.';
+  } else if (r.error) {
+    status.textContent = r.error;
+  } else {
+    status.textContent = "جارٍ فتح النفق الآمن… (بضع ثوانٍ)";
+    setTimeout(showRemoteStatus, 3000);
+  }
+}
+
+$("copyRemoteBtn").addEventListener("click", async () => {
+  const ok = remoteLink && (await copyText(remoteLink));
+  toast(ok ? "تم نسخ رابط الاتصال — افتحه على هاتفك فقط" : "تعذّر النسخ", ok ? "success" : "error");
+});
 
 function showLanUrl(url) {
   $("lanUrl").textContent = url;
@@ -1310,6 +1417,7 @@ function init() {
   window.addEventListener("offline", () => toast("انقطع الاتصال بالإنترنت", "error"));
   registerServiceWorker();
   initDeviceModel();
+  captureRemoteFromLink();
   const ready = checkServer();
   // لا نعالج ما شاركه المستخدم قبل معرفة وضع العمل (خادم أو جهاز)
   ready.finally(handleSharedLink);

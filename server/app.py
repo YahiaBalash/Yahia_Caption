@@ -17,12 +17,16 @@ import json
 import html
 import time
 import uuid
+import hmac
+import atexit
 import shutil
+import secrets
 import socket
 import logging
 import tempfile
 import threading
 import subprocess
+from urllib.parse import quote
 
 import requests
 import yt_dlp
@@ -57,6 +61,33 @@ API_FILE_LIMIT_MB = 25  # الحد الأقصى لحجم الملف الصوتي
 PORT = int(os.getenv("PORT", "5000"))
 # 127.0.0.1 = هذا الحاسوب فقط | 0.0.0.0 = يمكن فتح الموقع من الهاتف على نفس شبكة الواي فاي
 HOST = os.getenv("HOST", "127.0.0.1").strip()
+
+# نفق Cloudflare: لتعمل روابط الفيديو من صفحة GitHub عبر الإنترنت ما دام الحاسوب يعمل
+TUNNEL = os.getenv("TUNNEL", "0").strip().lower() in ("1", "true", "yes")
+PUBLIC_SITE_URL = os.getenv("PUBLIC_SITE_URL", "https://yahiabalash.github.io/Yahia_Caption/").strip()
+_bundled = os.path.join(SERVER_DIR, "bin", "cloudflared.exe" if os.name == "nt" else "cloudflared")
+CLOUDFLARED = _bundled if os.path.exists(_bundled) else shutil.which("cloudflared")
+TUNNEL_URL = None
+TUNNEL_ERROR = None
+
+
+def load_access_key():
+    """رمز دخول سري يُولَّد مرة واحدة ويُحفظ في server/.access_key (مستثنى من GitHub)."""
+    path = os.path.join(SERVER_DIR, ".access_key")
+    try:
+        with open(path, encoding="utf-8") as f:
+            key = f.read().strip()
+            if len(key) >= 24:
+                return key
+    except OSError:
+        pass
+    key = secrets.token_urlsafe(24)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(key)
+    return key
+
+
+ACCESS_KEY = load_access_key()
 
 ALLOWED_UPLOAD_EXT = {"mp4", "webm", "mov", "m4v", "mkv", "mp3", "m4a", "wav", "ogg"}
 # الصيغ التي تقبلها واجهات Whisper مباشرة إن لم يتوفر ffmpeg
@@ -666,11 +697,39 @@ def file_job(job_id, workdir, src_path, original_name, language):
 # ---------------------------------------------------------------------------
 @app.after_request
 def add_cors(resp):
-    # يسمح بفتح index.html مباشرة من الجهاز (file://) والاتصال بالخادم المحلي
+    # يسمح لصفحة GitHub وللملف المفتوح من الجهاز (file://) بالاتصال بهذا الخادم
     resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Access-Key"
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Access-Control-Max-Age"] = "600"
     return resp
+
+
+# ---------------------------------------------------------------------------
+# الوصول من الإنترنت عبر نفق Cloudflare (لتعمل الروابط من صفحة GitHub)
+# ---------------------------------------------------------------------------
+def is_remote_request():
+    """هل جاء الطلب من الإنترنت عبر النفق؟ (cloudflared يضيف هذه الترويسة دائماً)"""
+    return bool(request.headers.get("Cf-Connecting-Ip")) or (request.host or "").endswith(".trycloudflare.com")
+
+
+# ما يُسمح به عبر الإنترنت: الاستخراج فقط. الواجهة ومعلومات الشبكة ورموز QR للحاسوب وحده.
+REMOTE_ALLOWED = re.compile(r"^/api/(health|transcribe/url|transcribe/file|jobs/[0-9a-f]{32})$")
+
+
+@app.before_request
+def guard_remote():
+    if request.method == "OPTIONS":
+        return "", 204
+    if not is_remote_request():
+        return None  # الحاسوب نفسه وشبكة البيت: كما كان سابقاً
+    if not REMOTE_ALLOWED.match(request.path):
+        return jsonify(error="غير موجود"), 404
+    key = request.headers.get("X-Access-Key", "")
+    if not (ACCESS_KEY and hmac.compare_digest(key.encode(), ACCESS_KEY.encode())):
+        return jsonify(error="رمز الدخول غير صحيح. امسح رمز QR من نافذة «على الهاتف» في الحاسوب من جديد.",
+                       code="bad_access_key"), 401
+    return None
 
 
 @app.errorhandler(413)
@@ -734,11 +793,24 @@ def lan_info():
     return jsonify(enabled=HOST in ("0.0.0.0", "::"), port=PORT, addresses=lan_addresses())
 
 
+def remote_link():
+    """رابط صفحة GitHub مع عنوان النفق ورمز الدخول بعد علامة # (لا يُرسَل إلى خوادم GitHub)."""
+    if not TUNNEL_URL:
+        return None
+    return f"{PUBLIC_SITE_URL}#server={quote(TUNNEL_URL, safe='')}&key={ACCESS_KEY}"
+
+
+@app.route("/api/remote")
+def remote_info():
+    return jsonify(enabled=TUNNEL, available=bool(CLOUDFLARED), ready=bool(TUNNEL_URL),
+                   error=TUNNEL_ERROR, tunnel_url=TUNNEL_URL, link=remote_link(), site=PUBLIC_SITE_URL)
+
+
 @app.route("/api/qr.svg")
 def qr_svg():
-    """رمز QR لعنوان الموقع على الشبكة المحلية (نقبل فقط عناوين هذا الحاسوب)."""
+    """رمز QR لعنوان الموقع (نقبل فقط عناوين هذا الحاسوب ورابط الوصول من GitHub)."""
     url = request.args.get("url", "")
-    if url not in {a["url"] for a in lan_addresses()}:
+    if url not in {a["url"] for a in lan_addresses()} and url != remote_link():
         return jsonify(error="عنوان غير مسموح"), 400
     import io
     import qrcode
@@ -810,6 +882,34 @@ def job_status(job_id):
         return jsonify({k: v for k, v in job.items() if k != "created"})
 
 
+def start_tunnel():
+    """يشغّل نفق Cloudflare السريع (مجاني، دون حساب) ويلتقط عنوانه المؤقت."""
+    global TUNNEL_URL, TUNNEL_ERROR
+    if not CLOUDFLARED:
+        TUNNEL_ERROR = "برنامج cloudflared غير موجود في server/bin (راجع README)."
+        log.warning(TUNNEL_ERROR)
+        return
+    proc = subprocess.Popen([CLOUDFLARED, "tunnel", "--url", f"http://127.0.0.1:{PORT}", "--no-autoupdate"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                            encoding="utf-8", errors="ignore",
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    atexit.register(proc.terminate)  # إغلاق النفق مع إغلاق الخادم
+
+    def read_output():
+        global TUNNEL_URL, TUNNEL_ERROR
+        for line in proc.stderr:
+            m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
+            if m and not TUNNEL_URL:
+                TUNNEL_URL = m.group(0)
+                log.info("النفق جاهز. من الهاتف عبر GitHub افتح (أو امسح رمز QR من زر «على الهاتف»):")
+                log.info("%s", remote_link())
+        if not TUNNEL_URL:
+            TUNNEL_ERROR = "تعذّر فتح النفق. تحقق من اتصال الإنترنت ثم أعد تشغيل الخادم."
+            log.warning(TUNNEL_ERROR)
+
+    threading.Thread(target=read_output, daemon=True).start()
+
+
 if __name__ == "__main__":
     ready, msg = provider_status()
     log.info("خدمة التفريغ: %s | جاهزة: %s | ffmpeg: %s", msg, ready, FFMPEG or "غير متوفر")
@@ -817,4 +917,6 @@ if __name__ == "__main__":
     if HOST in ("0.0.0.0", "::"):
         for a in lan_addresses():
             log.info("من الهاتف (نفس شبكة الواي فاي): %s  [%s]", a["url"], a["interface"])
+    if TUNNEL:
+        start_tunnel()
     app.run(host=HOST, port=PORT, debug=False, threaded=True)

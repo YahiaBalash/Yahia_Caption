@@ -328,6 +328,22 @@
     <form method="dialog">
       <h3>افتح <span dir="ltr">«Caption AI»</span> على هاتفك</h3>
 
+      <!-- الوصول من أي مكان عبر رابط GitHub -->
+      <div class="remote-section remote-first">
+        <h4>① من أي مكان عبر رابط GitHub (الأسهل)</h4>
+        <div id="remoteReady" class="qr-box" hidden>
+          <img id="remoteQr" alt="رمز QR للاتصال بحاسوبك من رابط GitHub" width="200" height="200" />
+          <div>
+            <p class="muted-text">امسح هذا الرمز من هاتفك <strong>مرة واحدة بعد كل تشغيل للخادم</strong>. يحفظ موقع GitHub الاتصال، فتعمل روابط الفيديو من أي مكان ما دام الحاسوب والخادم يعملان.</p>
+            <button type="button" id="copyRemoteBtn" class="btn btn-outline btn-sm"><svg class="ic"><use href="#i-copy"/></svg> نسخ رابط الاتصال</button>
+            <p class="muted-text remote-warn">⚠️ الرمز يحتوي رمز دخول سرياً لحاسوبك؛ لا تشاركه مع أحد.</p>
+          </div>
+        </div>
+        <p id="remoteStatus" class="muted-text"></p>
+      </div>
+
+      <h4 class="lan-title">② من شبكة الواي فاي نفسها</h4>
+
       <div id="phoneDisabled" class="alert alert-warn" hidden>
         <svg class="ic"><use href="#i-alert"/></svg>
         <p>الوصول من الهاتف غير مفعّل. أضف السطر <code dir="ltr">HOST=0.0.0.0</code> إلى ملف <code dir="ltr">server/.env</code> ثم أعد تشغيل الخادم.</p>
