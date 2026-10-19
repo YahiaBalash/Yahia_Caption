@@ -199,6 +199,7 @@ function isRtlText(text) {
 // =========================================================
 // فحص الخادم
 // =========================================================
+let serverRetryTimer = null;
 async function checkServer() {
   const pill = els.serverStatus;
   const set = (cls, text, title) => {
@@ -215,7 +216,10 @@ async function checkServer() {
     clearTimeout(t);
     if (!res.ok) throw new Error();
     state.server = await res.json();
+    if (state.mode === "device") toast("عاد الاتصال بالخادم، والروابط تعمل الآن", "info");
     state.mode = "server";
+    clearInterval(serverRetryTimer);
+    serverRetryTimer = null;
     els.dropLimit.textContent = `الحد الأقصى ${state.server.max_upload_mb} ميغابايت و${state.server.max_duration_min} دقيقة`;
     if (state.server.stt_ready) {
       set("status-ok", "الخادم متصل · " + state.server.stt_message);
@@ -225,6 +229,10 @@ async function checkServer() {
     }
   } catch (_) {
     state.server = null;
+    // على عنوان الحاسوب: نعيد الفحص كل 15 ثانية، فتعود الروابط تلقائياً بمجرد تشغيل الخادم
+    if (!IS_STATIC_HOST && !serverRetryTimer) {
+      serverRetryTimer = setInterval(() => { if (!state.busy) checkServer(); }, 15000);
+    }
     if (DEVICE_ASR_SUPPORTED) {
       // الوضع المستقل: الملفات تُفرَّغ على هذا الجهاز، والروابط تحتاج الخادم
       state.mode = "device";
